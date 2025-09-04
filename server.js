@@ -1,6 +1,9 @@
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
+// 👉 1. Importa y configura 'debug'
+const debugConnection = require('debug')('app:connection');
+const debugGame = require('debug')('app:game');
 
 const app = express();
 const server = http.createServer(app);
@@ -17,7 +20,7 @@ const WINNING_SCORE = 7;
 
 // --- Estado del Juego ---
 let gamePhase = 'waiting';
-let playersReady = new Set(); // 👉 Para registrar quién está listo para la revancha
+let playersReady = new Set();
 
 const ball = { x: canvasWidth / 2, y: canvasHeight / 2, dx: 5, dy: 5, size: 15 };
 const score = { left: 0, right: 0 };
@@ -27,9 +30,10 @@ const paddleState = {
 };
 const playerAssignments = {};
 
-console.log("🚀 Servidor Socket.IO listo...");
+debugGame("🚀 Servidor Socket.IO listo para iniciar...");
 
 function resetBall() {
+  debugGame("⚽ Pelota reiniciada al centro");
   ball.x = canvasWidth / 2;
   ball.y = canvasHeight / 2;
   ball.dx = 5 * (Math.random() > 0.5 ? 1 : -1);
@@ -39,15 +43,15 @@ function resetBall() {
 function checkAndStartGame() {
   const activePlayers = Object.values(playerAssignments).filter(p => p !== 'spectator').length;
   if (activePlayers === 2) {
-    console.log("🎮 Ambos jugadores conectados. ¡Iniciando juego!");
+    debugGame("🎮 Ambos jugadores conectados. ¡Iniciando juego!");
     gamePhase = 'active';
     score.left = 0;
     score.right = 0;
-    playersReady.clear(); // Limpia la lista de listos para la siguiente partida
+    playersReady.clear();
     resetBall();
     io.emit("gameStart", { score });
   } else {
-    console.log("⏳ Esperando más jugadores...");
+    debugGame("⏳ Esperando más jugadores...");
     gamePhase = 'waiting';
     playersReady.clear();
     io.emit("waitingForPlayers");
@@ -65,10 +69,12 @@ function updateBall() {
 
   if (scorer) {
     score[scorer]++;
+    debugGame(`Punto para ${scorer}. Marcador: ${score.left} - ${score.right}`);
     io.emit("scoreUpdate", score);
     if (score[scorer] >= WINNING_SCORE) {
       gamePhase = 'gameOver';
-      playersReady.clear(); // Limpia la lista al terminar el juego
+      playersReady.clear();
+      debugGame(`Juego terminado. Ganador: ${scorer}`);
       io.emit("gameOver", { winner: scorer });
     } else {
       resetBall();
@@ -84,7 +90,7 @@ function updateBall() {
 }
 
 io.on("connection", (socket) => {
-  console.log("🔌 Nuevo jugador conectado:", socket.id);
+  debugConnection("🔌 Nuevo jugador conectado: %s", socket.id);
   const assignedSides = Object.values(playerAssignments);
   let side = 'spectator';
   if (!assignedSides.includes('left')) side = 'left';
@@ -93,34 +99,32 @@ io.on("connection", (socket) => {
   playerAssignments[socket.id] = side;
   socket.emit("playerSide", { side });
   socket.emit("scoreUpdate", score);
-  console.log(`Asignado ${socket.id} al lado ${side}`);
+  debugConnection(`Asignado ${socket.id} al lado ${side}`);
   checkAndStartGame();
 
   socket.on("movePaddle", ({ side, y }) => {
     if (playerAssignments[socket.id] === side && paddleState[side]) paddleState[side].y = y * canvasHeight;
   });
   
-  // 👉 LÓGICA DE REVANCHA MODIFICADA
   socket.on("restartGame", () => {
     if (gamePhase === 'gameOver') {
-      playersReady.add(socket.id); // Añade al jugador actual a la lista de listos
+      playersReady.add(socket.id);
       const activePlayersCount = Object.values(playerAssignments).filter(p => p !== 'spectator').length;
       
-      // Si todos los jugadores activos están listos, reinicia
       if (playersReady.size === activePlayersCount && activePlayersCount === 2) {
-        console.log("🔄 Ambos jugadores listos. Reiniciando...");
+        debugGame("🔄 Ambos jugadores listos. Reiniciando...");
         paddleState.left.y = canvasHeight / 2 - paddleHeight / 2;
         paddleState.right.y = canvasHeight / 2 - paddleHeight / 2;
         checkAndStartGame();
       } else {
-        console.log(`⏳ Jugador ${socket.id} está listo. Esperando al oponente...`);
+        debugGame(`⏳ Jugador ${socket.id} está listo. Esperando al oponente...`);
       }
     }
   });
 
   socket.on("disconnect", () => {
-    console.log("❌ Jugador desconectado:", socket.id);
-    playersReady.delete(socket.id); // Quítalo de la lista de listos si se desconecta
+    debugConnection("❌ Jugador desconectado: %s", socket.id);
+    playersReady.delete(socket.id);
     delete playerAssignments[socket.id];
     checkAndStartGame();
   });
@@ -132,6 +136,8 @@ setInterval(() => {
   io.emit("gameState", gameState);
 }, 16);
 
-server.listen(3000, () => {
-  console.log("🚀 Servidor Socket.IO corriendo en http://localhost:3000");
+// Usamos la versión compatible con Render
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  debugGame(`🚀 Servidor Socket.IO corriendo en el puerto ${PORT}`);
 });
