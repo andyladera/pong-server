@@ -13,8 +13,11 @@ const canvasWidth = 800;
 const canvasHeight = 600;
 const paddleHeight = 100;
 const paddleWidth = 20;
+const WINNING_SCORE = 7; // Puntuación para ganar
 
-// 👉 1. ESTADO DEL JUEGO SEPARADO Y MÁS CLARO
+// --- Estado del Juego ---
+let isGameActive = true;
+
 const ball = {
   x: canvasWidth / 2,
   y: canvasHeight / 2,
@@ -23,13 +26,16 @@ const ball = {
   size: 15,
 };
 
-// Objeto solo para las posiciones de las paletas
+const score = {
+  left: 0,
+  right: 0,
+};
+
 const paddleState = {
   left: { y: canvasHeight / 2 - paddleHeight / 2 },
   right: { y: canvasHeight / 2 - paddleHeight / 2 },
 };
 
-// Objeto solo para saber qué jugador tiene qué lado
 const playerAssignments = {}; // Ej: { 'socket_id_123': 'left' }
 
 console.log("🚀 Servidor Socket.IO listo...");
@@ -38,8 +44,8 @@ function resetBall() {
   console.log("⚽ Pelota reiniciada al centro");
   ball.x = canvasWidth / 2;
   ball.y = canvasHeight / 2;
-  ball.dx = 5 * (Math.random() > 0.5 ? 1 : -1); // Dirección X aleatoria
-  ball.dy = 5 * (Math.random() > 0.5 ? 1 : -1); // Dirección Y aleatoria
+  ball.dx = 5 * (Math.random() > 0.5 ? 1 : -1);
+  ball.dy = 5 * (Math.random() > 0.5 ? 1 : -1);
 }
 
 function updateBall() {
@@ -50,8 +56,27 @@ function updateBall() {
     ball.dy *= -1;
   }
 
-  if (ball.x + ball.size < 0 || ball.x > canvasWidth) {
-    resetBall();
+  // Lógica de Puntuación y Victoria
+  if (ball.x + ball.size < 0) { // Punto para la derecha
+    score.right++;
+    io.emit("scoreUpdate", score);
+    if (score.right >= WINNING_SCORE) {
+      isGameActive = false;
+      io.emit("gameOver", { winner: "right" });
+    } else {
+      resetBall();
+    }
+    return;
+  }
+  if (ball.x > canvasWidth) { // Punto para la izquierda
+    score.left++;
+    io.emit("scoreUpdate", score);
+    if (score.left >= WINNING_SCORE) {
+      isGameActive = false;
+      io.emit("gameOver", { winner: "left" });
+    } else {
+      resetBall();
+    }
     return;
   }
 
@@ -95,7 +120,6 @@ function updateBall() {
   }
 }
 
-// 👉 2. LÓGICA DE CONEXIÓN MÁS LIMPIA
 io.on("connection", (socket) => {
   console.log("🔌 Nuevo jugador conectado:", socket.id);
 
@@ -111,13 +135,22 @@ io.on("connection", (socket) => {
 
   playerAssignments[socket.id] = side;
   socket.emit("playerSide", { side });
+  socket.emit("scoreUpdate", score); // Enviar marcador al nuevo jugador
   console.log(`Asignado ${socket.id} al lado ${side}`);
 
   socket.on("movePaddle", ({ side, y }) => {
-    // Verificar que el jugador está moviendo su propia paleta
     if (playerAssignments[socket.id] === side && paddleState[side]) {
       paddleState[side].y = y * canvasHeight;
     }
+  });
+  
+  socket.on("restartGame", () => {
+    console.log("🔄 Reiniciando el juego...");
+    score.left = 0;
+    score.right = 0;
+    isGameActive = true;
+    resetBall();
+    io.emit("gameRestart", { score });
   });
 
   socket.on("disconnect", () => {
@@ -126,9 +159,10 @@ io.on("connection", (socket) => {
   });
 });
 
-// 👉 3. BUCLE PRINCIPAL USANDO EL NUEVO ESTADO
 setInterval(() => {
-  updateBall();
+  if (isGameActive) {
+    updateBall();
+  }
 
   const gameState = {
     ball: {
